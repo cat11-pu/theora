@@ -289,13 +289,20 @@ extern int th_decode_ctl(th_dec_ctx *_dec,int _req,void *_buf,
  * \retval 0             Success.
  *                       A new decoded frame can be retrieved by calling
  *                        th_decode_ycbcr_out().
- * \retval TH_DUPFRAME   The packet represented a dropped frame (either a
- *                        0-byte frame or an INTER frame with no coded blocks).
- *                       The player can skip the call to th_decode_ycbcr_out(),
- *                        as the contents of the decoded frame buffer have not
- *                        changed.
+ * \retval TH_DUPFRAME   The packet was an INTER frame with no coded blocks.
+ *                       The reference frame was available, so the previous
+ *                        frame is repeated; the player can skip the call to
+ *                        th_decode_ycbcr_out() because the decoded frame
+ *                        buffer has not changed.
  * \retval TH_EFAULT     \a _dec or \a _op was <tt>NULL</tt>.
- * \retval TH_EBADPACKET \a _op does not contain encoded video data.
+ * \retval TH_EBADPACKET \a _op does not contain encoded video data, or it
+ *                        requires a reference frame that is not available.
+ *                       A 0-byte (dropped) packet, an INTER frame submitted
+ *                        before any key frame, or any INTER frame that
+ *                        depends on a previously dropped frame is rejected.
+ *                       The decoder keeps its references invalid and skips
+ *                        every such frame until the next intra (key) frame,
+ *                        which resynchronizes decoding.
  * \retval TH_EIMPL      The video data uses bitstream features which this
  *                        library does not support.*/
 extern int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,

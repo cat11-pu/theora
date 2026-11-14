@@ -1966,6 +1966,7 @@ th_dec_ctx *th_decode_alloc(const th_info *_info,const th_setup_info *_setup){
     oc_aligned_free(dec);
     return NULL;
   }
+  dec->nmissing_refs=0;
   dec->state.curframe_num=0;
   return dec;
 }
@@ -2047,36 +2048,20 @@ int th_decode_ctl(th_dec_ctx *_dec,int _req,void *_buf,
   }
 }
 
-/*We're decoding an INTER frame, but have no initialized reference
-   buffers (i.e., decoding did not start on a key frame).
-  We initialize them to a solid gray here.*/
-static void oc_dec_init_dummy_frame(th_dec_ctx *_dec){
-  th_info   *info;
-  size_t     yplane_sz;
-  size_t     cplane_sz;
-  ptrdiff_t  yoffset;
-  int        yhstride;
-  int        yheight;
-  int        chstride;
-  int        cheight;
-  _dec->state.ref_frame_idx[OC_FRAME_GOLD]=0;
-  _dec->state.ref_frame_idx[OC_FRAME_PREV]=0;
-  _dec->state.ref_frame_idx[OC_FRAME_SELF]=0;
-  _dec->state.ref_frame_data[OC_FRAME_GOLD]=
-   _dec->state.ref_frame_data[OC_FRAME_PREV]=
-   _dec->state.ref_frame_data[OC_FRAME_SELF]=
-   _dec->state.ref_frame_bufs[0][0].data;
-  memcpy(_dec->pp_frame_buf,_dec->state.ref_frame_bufs[0],
-   sizeof(_dec->pp_frame_buf[0])*3);
-  info=&_dec->state.info;
-  yhstride=abs(_dec->state.ref_ystride[0]);
-  yheight=info->frame_height+2*OC_UMV_PADDING;
-  chstride=abs(_dec->state.ref_ystride[1]);
-  cheight=yheight>>!(info->pixel_fmt&2);
-  yplane_sz=yhstride*(size_t)yheight+16;
-  cplane_sz=chstride*(size_t)cheight;
-  yoffset=yhstride*(ptrdiff_t)(yheight-OC_UMV_PADDING-1)+OC_UMV_PADDING;
-  memset(_dec->state.ref_frame_data[0]-yoffset,0x80,yplane_sz+2*cplane_sz);
+/*Mark the reference frame state as invalid after a dropped/corrupted frame.
+  The current reference buffers must not be used to reconstruct any further
+   inter frame, because the frame that should have updated them is missing.
+  Invalidating the indices makes every subsequent inter frame fail the
+   reference-availability check until an intra frame rebuilds both references.
+  The buffer storage itself is kept, so no allocation or teardown is needed.*/
+static void oc_dec_mark_ref_missing(th_dec_ctx *_dec){
+  _dec->nmissing_refs++;
+  _dec->state.ref_frame_idx[OC_FRAME_GOLD]=-1;
+  _dec->state.ref_frame_idx[OC_FRAME_PREV]=-1;
+  _dec->state.ref_frame_idx[OC_FRAME_SELF]=-1;
+  _dec->state.ref_frame_data[OC_FRAME_GOLD]=NULL;
+  _dec->state.ref_frame_data[OC_FRAME_PREV]=NULL;
+  _dec->state.ref_frame_data[OC_FRAME_SELF]=NULL;
 }
 
 #if defined(HAVE_CAIRO)
@@ -2741,24 +2726,34 @@ int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
  ogg_int64_t *_granpos){
   int ret;
   if(_dec==NULL||_op==NULL)return TH_EFAULT;
-  /*A completely empty packet indicates a dropped frame and is treated exactly
-     like an inter frame with no coded blocks.*/
+  /*A completely empty packet indicates a dropped frame.
+    The reference frame it would have produced is unavailable, so reject it
+     immediately and invalidate the current references instead of silently
+     emitting a stale duplicate or touching uninitialized buffers.*/
   if(_op->bytes==0){
-    _dec->state.frame_type=OC_INTER_FRAME;
-    _dec->state.ntotal_coded_fragis=0;
+    oc_dec_mark_ref_missing(_dec);
+    return TH_EBADPACKET;
+  }
+  oc_pack_readinit(&_dec->opb,_op->packet,_op->bytes);
+  ret=oc_dec_frame_header_unpack(_dec);
+  if(ret<0)return ret;
+  if(_dec->state.frame_type==OC_INTRA_FRAME){
+    /*A keyframe needs no references and resynchronizes the decoder after any
+       number of lost frames.*/
+    _dec->nmissing_refs=0;
+    oc_dec_mark_all_intra(_dec);
   }
   else{
-    oc_pack_readinit(&_dec->opb,_op->packet,_op->bytes);
-    ret=oc_dec_frame_header_unpack(_dec);
-    if(ret<0)return ret;
-    if(_dec->state.frame_type==OC_INTRA_FRAME)oc_dec_mark_all_intra(_dec);
-    else oc_dec_coded_flags_unpack(_dec);
-  }
-  /*If there have been no reference frames, and we need one, initialize one.*/
-  if(_dec->state.frame_type!=OC_INTRA_FRAME&&
-   (_dec->state.ref_frame_idx[OC_FRAME_GOLD]<0||
-   _dec->state.ref_frame_idx[OC_FRAME_PREV]<0)){
-    oc_dec_init_dummy_frame(_dec);
+    /*An inter frame can only be decoded if both reference frames are valid.
+      If a previous frame was lost (or no keyframe has ever been decoded),
+       reject this frame and keep the reference state invalid rather than
+       synthesizing a dummy gray frame or reading out of bounds.*/
+    if(_dec->state.ref_frame_idx[OC_FRAME_GOLD]<0||
+     _dec->state.ref_frame_idx[OC_FRAME_PREV]<0){
+      oc_dec_mark_ref_missing(_dec);
+      return TH_EBADPACKET;
+    }
+    oc_dec_coded_flags_unpack(_dec);
   }
   /*If this was an inter frame with no coded blocks...*/
   if(_dec->state.ntotal_coded_fragis<=0){

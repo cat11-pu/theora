@@ -18,7 +18,8 @@ TESTS_DEC = noop_theora \
 	comment comment_theoradec comment_theora
 
 TESTS_ENC = noop noop_theoraenc \
-	granulepos granulepos_theoraenc granulepos_theora
+	granulepos granulepos_theoraenc granulepos_theora \
+	refloss_test
 
 if THEORA_DISABLE_ENCODE
 TESTS = $(TESTS_DEC)
@@ -56,6 +57,12 @@ comment_theoradec_CFLAGS = $(OGG_CFLAGS)
 comment_theora_SOURCES = comment_theora.c
 comment_theora_LDADD = $(THEORA_LIBS)
 comment_theora_CFLAGS = $(OGG_CFLAGS)
+
+# reference-frame loss: dropped packets must be rejected and resync on the
+# next keyframe without crashes or out-of-bounds accesses
+refloss_test_SOURCES = refloss/refloss_test.c
+refloss_test_LDADD = $(THEORAENC_LIBS) -lm
+refloss_test_CFLAGS = $(OGG_CFLAGS)
 
 granulepos_SOURCES = granulepos.c
 granulepos_LDADD = $(THEORAENC_LIBS) -lm

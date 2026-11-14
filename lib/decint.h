@@ -115,6 +115,13 @@ struct oc_dec_pipeline_state{
 struct th_dec_ctx{
   /*Shared encoder/decoder state.*/
   oc_theora_state        state;
+  /*The number of consecutive frames rejected because their required reference
+     frame was unavailable.
+    This accumulates across a burst of packet loss and is reset to zero when
+     an intra frame resynchronizes the decoder.
+    The actual availability check uses the (invalidated) reference frame
+     indices in oc_theora_state.*/
+  int                    nmissing_refs;
   /*Whether or not packets are ready to be emitted.
     This takes on negative values while there are remaining header packets to
      be emitted, reaches 0 when the codec is ready for input, and goes to 1
