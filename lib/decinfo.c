@@ -88,7 +88,11 @@ static int oc_info_unpack(oc_pack_buf *_opb,th_info *_info){
     return TH_EBADHEADER;
   }
 #if defined(HAVE_MEMORY_CONSTRAINT)
-  if(_info->frame_width>=MAX_FUZZING_WIDTH&&_info->frame_height>=MAX_FUZZING_HEIGHT){
+  /*Reject when either dimension exceeds the fuzzing limit; an AND here would
+     let a stream with a single oversized dimension (e.g. 1044576x64) slip
+     through and spend an unbounded amount of CPU time in the decoder.*/
+  if(_info->frame_width>=MAX_FUZZING_WIDTH||
+   _info->frame_height>=MAX_FUZZING_HEIGHT){
     return TH_EBADHEADER;
   }
 #endif

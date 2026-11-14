@@ -1508,7 +1508,7 @@ void oc_dec_dc_unpredict_mcu_plane_c(oc_dec_ctx *_dec,
   The token lists for each color plane and coefficient should also be filled
    in, along with initial token offsets, extra bits offsets, and EOB run
    counts.*/
-static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
+static int oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
  oc_dec_pipeline_state *_pipe,int _pli){
   unsigned char       *dct_tokens;
   const unsigned char *dct_fzig_zag;
@@ -1573,6 +1573,13 @@ static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
         _pipe->dct_coeffs[dct_fzig_zag[zzi]]=
          (ogg_int16_t)(coeff*(int)ac_quant[zzi]);
         zzi+=!eob;
+        /*If zzi did not advance at all and no EOB was scheduled, the next
+           iteration would decode the same coefficient position forever.
+          A legal stream always makes forward progress: value tokens advance
+           by one, run tokens advance by rlen, and a non-zero eob exits via
+           the eob_runs check at the top of the next iteration; a zero-length
+           run with a zero EOB can only come from corrupt data.*/
+        if(eob==0&&zzi==last_zzi)return TH_EBADPACKET;
       }
     }
     /*TODO: zzi should be exactly 64 here.
@@ -1604,6 +1611,7 @@ static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
      _dec->state.ref_ystride[_pli],_pipe->uncoded_fragis[_pli],
      _pipe->nuncoded_fragis[_pli],_dec->state.frag_buf_offs);
   }
+  return 0;
 }
 
 /*Filter a horizontal block edge.*/
@@ -2874,7 +2882,8 @@ int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
         _dec->pipe.fragy_end[pli]=OC_MINI(fplane->nvfrags,
          _dec->pipe.fragy0[pli]+(_dec->pipe.mcu_nvfrags>>frag_shift));
         oc_dec_dc_unpredict_mcu_plane(_dec,&_dec->pipe,pli);
-        oc_dec_frags_recon_mcu_plane(_dec,&_dec->pipe,pli);
+        ret=oc_dec_frags_recon_mcu_plane(_dec,&_dec->pipe,pli);
+        if(ret<0)return ret;
         sdelay=edelay=0;
         if(_dec->pipe.loop_filter){
           sdelay+=notstart;
