@@ -17,6 +17,17 @@
 #include <string.h>
 #include "internal.h"
 
+/*Branchless clamp to the 8-bit range.
+  This produces the identical byte as OC_CLAMP255 for every signed 16-bit
+   argument (the full range of an iDCT residue plus an 8-bit predictor), but
+   the two min/max selects compile to conditional moves instead of the macro's
+   sign-mask arithmetic, and need no memory table or temporary buffer.*/
+static inline unsigned char oc_clamp255_fast(int _x){
+  _x=_x<0?0:_x;
+  _x=_x>255?255:_x;
+  return (unsigned char)_x;
+}
+
 void oc_frag_copy_c(unsigned char *_dst,const unsigned char *_src,int _ystride){
   int i;
   for(i=8;i-->0;){
@@ -50,8 +61,18 @@ void oc_frag_recon_intra_c(unsigned char *_dst,int _ystride,
  const ogg_int16_t _residue[64]){
   int i;
   for(i=0;i<8;i++){
-    int j;
-    for(j=0;j<8;j++)_dst[j]=OC_CLAMP255(_residue[i*8+j]+128);
+    const ogg_int16_t *r=_residue+(i<<3);
+    /*Fully unrolled 8-pixel row: no inner-loop counter and no per-pixel
+       address arithmetic, which lets the compiler schedule the clamps back
+       to back without a temporary row buffer.*/
+    _dst[0]=oc_clamp255_fast(r[0]+128);
+    _dst[1]=oc_clamp255_fast(r[1]+128);
+    _dst[2]=oc_clamp255_fast(r[2]+128);
+    _dst[3]=oc_clamp255_fast(r[3]+128);
+    _dst[4]=oc_clamp255_fast(r[4]+128);
+    _dst[5]=oc_clamp255_fast(r[5]+128);
+    _dst[6]=oc_clamp255_fast(r[6]+128);
+    _dst[7]=oc_clamp255_fast(r[7]+128);
     _dst+=_ystride;
   }
 }
@@ -60,8 +81,15 @@ void oc_frag_recon_inter_c(unsigned char *_dst,
  const unsigned char *_src,int _ystride,const ogg_int16_t _residue[64]){
   int i;
   for(i=0;i<8;i++){
-    int j;
-    for(j=0;j<8;j++)_dst[j]=OC_CLAMP255(_residue[i*8+j]+_src[j]);
+    const ogg_int16_t *r=_residue+(i<<3);
+    _dst[0]=oc_clamp255_fast(r[0]+_src[0]);
+    _dst[1]=oc_clamp255_fast(r[1]+_src[1]);
+    _dst[2]=oc_clamp255_fast(r[2]+_src[2]);
+    _dst[3]=oc_clamp255_fast(r[3]+_src[3]);
+    _dst[4]=oc_clamp255_fast(r[4]+_src[4]);
+    _dst[5]=oc_clamp255_fast(r[5]+_src[5]);
+    _dst[6]=oc_clamp255_fast(r[6]+_src[6]);
+    _dst[7]=oc_clamp255_fast(r[7]+_src[7]);
     _dst+=_ystride;
     _src+=_ystride;
   }
@@ -71,8 +99,17 @@ void oc_frag_recon_inter2_c(unsigned char *_dst,const unsigned char *_src1,
  const unsigned char *_src2,int _ystride,const ogg_int16_t _residue[64]){
   int i;
   for(i=0;i<8;i++){
-    int j;
-    for(j=0;j<8;j++)_dst[j]=OC_CLAMP255(_residue[i*8+j]+(_src1[j]+_src2[j]>>1));
+    const ogg_int16_t *r=_residue+(i<<3);
+    /*(_src1+_src2)>>1 is the VP3 rounded average: it matches the MMX/ARM
+       kernels (16-bit add followed by an arithmetic shift right by one).*/
+    _dst[0]=oc_clamp255_fast(r[0]+((_src1[0]+_src2[0])>>1));
+    _dst[1]=oc_clamp255_fast(r[1]+((_src1[1]+_src2[1])>>1));
+    _dst[2]=oc_clamp255_fast(r[2]+((_src1[2]+_src2[2])>>1));
+    _dst[3]=oc_clamp255_fast(r[3]+((_src1[3]+_src2[3])>>1));
+    _dst[4]=oc_clamp255_fast(r[4]+((_src1[4]+_src2[4])>>1));
+    _dst[5]=oc_clamp255_fast(r[5]+((_src1[5]+_src2[5])>>1));
+    _dst[6]=oc_clamp255_fast(r[6]+((_src1[6]+_src2[6])>>1));
+    _dst[7]=oc_clamp255_fast(r[7]+((_src1[7]+_src2[7])>>1));
     _dst+=_ystride;
     _src1+=_ystride;
     _src2+=_ystride;

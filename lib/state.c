@@ -1004,13 +1004,22 @@ static void loop_filter_h(unsigned char *_pix,int _ystride,signed char *_bv){
   _pix-=2;
   for(y=0;y<8;y++){
     int f;
+    int p1;
+    int p2;
     f=_pix[0]-_pix[3]+3*(_pix[2]-_pix[1]);
     /*The _bv array is used to compute the function
       f=OC_CLAMPI(OC_MINI(-_2flimit-f,0),f,OC_MAXI(_2flimit-f,0));
       where _2flimit=_state->loop_filter_limits[_state->qis[0]]<<1;*/
     f=*(_bv+(f+4>>3));
-    _pix[1]=OC_CLAMP255(_pix[1]+f);
-    _pix[2]=OC_CLAMP255(_pix[2]-f);
+    /*Pixels are 0..255 and f is bounded by the filter limit; the branchless
+       min/max clamp matches OC_CLAMP255 exactly but emits conditional moves
+       instead of the macro's data-dependent branches.*/
+    p1=_pix[1]+f;
+    p2=_pix[2]-f;
+    if(p1<0)p1=0;else if(p1>255)p1=255;
+    if(p2<0)p2=0;else if(p2>255)p2=255;
+    _pix[1]=(unsigned char)p1;
+    _pix[2]=(unsigned char)p2;
     _pix+=_ystride;
   }
 }
@@ -1020,13 +1029,19 @@ static void loop_filter_v(unsigned char *_pix,int _ystride,signed char *_bv){
   _pix-=_ystride*2;
   for(x=0;x<8;x++){
     int f;
+    int p1;
+    int p2;
     f=_pix[x]-_pix[_ystride*3+x]+3*(_pix[_ystride*2+x]-_pix[_ystride+x]);
     /*The _bv array is used to compute the function
       f=OC_CLAMPI(OC_MINI(-_2flimit-f,0),f,OC_MAXI(_2flimit-f,0));
       where _2flimit=_state->loop_filter_limits[_state->qis[0]]<<1;*/
     f=*(_bv+(f+4>>3));
-    _pix[_ystride+x]=OC_CLAMP255(_pix[_ystride+x]+f);
-    _pix[_ystride*2+x]=OC_CLAMP255(_pix[_ystride*2+x]-f);
+    p1=_pix[_ystride+x]+f;
+    p2=_pix[_ystride*2+x]-f;
+    if(p1<0)p1=0;else if(p1>255)p1=255;
+    if(p2<0)p2=0;else if(p2>255)p2=255;
+    _pix[_ystride+x]=(unsigned char)p1;
+    _pix[_ystride*2+x]=(unsigned char)p2;
   }
 }
 

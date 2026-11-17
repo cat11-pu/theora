@@ -1,0 +1,2 @@
+clamp255 helper matches OC_CLAMP255 across the full int16 domain
+PASS clamp255_exact (exit status: 0)

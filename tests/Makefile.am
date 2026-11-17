@@ -15,7 +15,8 @@ TEST_ENV = @TEST_ENV@
 LOG_COMPILER=$(LIBTOOL) --mode=execute $(VALGRIND) $(TEST_ENV)
 
 TESTS_DEC = noop_theora \
-	comment comment_theoradec comment_theora
+	comment comment_theoradec comment_theora \
+	clamp255_exact
 
 TESTS_ENC = noop noop_theoraenc \
 	granulepos granulepos_theoraenc granulepos_theora
@@ -27,6 +28,10 @@ TESTS = $(TESTS_DEC) $(TESTS_ENC)
 endif
 
 check_PROGRAMS = $(TESTS)
+
+# exhaustively verifies the branchless reconstruction clamp matches OC_CLAMP255
+clamp255_exact_SOURCES = clamp255_exact.c
+clamp255_exact_CFLAGS = -I$(top_srcdir)/lib -I$(top_builddir)/lib $(OGG_CFLAGS)
 # dummy call tests for the current api
 noop_SOURCES = noop.c
 noop_LDADD = $(THEORAENC_LIBS)
