@@ -15,7 +15,7 @@ TEST_ENV = @TEST_ENV@
 LOG_COMPILER=$(LIBTOOL) --mode=execute $(VALGRIND) $(TEST_ENV)
 
 TESTS_DEC = noop_theora \
-	comment comment_theoradec comment_theora
+	comment comment_theoradec comment_theora malformed_test
 
 TESTS_ENC = noop noop_theoraenc \
 	granulepos granulepos_theoraenc granulepos_theora
@@ -27,6 +27,26 @@ TESTS = $(TESTS_DEC) $(TESTS_ENC)
 endif
 
 check_PROGRAMS = $(TESTS)
+
+EXTRA_DIST = malformed/README.md malformed/gen_samples.py \
+	malformed/run_mutations.py malformed/decode_tpk.c \
+	malformed/samples/valid.ogv malformed/samples/valid.tpk \
+	malformed/samples/truncated_frame.tpk \
+	malformed/samples/bad_quant_nbms.tpk \
+	malformed/samples/bad_quant_bmi.tpk \
+	malformed/samples/bad_quant_truncated.tpk \
+	malformed/samples/bad_mv_truncated.tpk \
+	malformed/report/REPORT.md \
+	malformed/report/sample_results.tsv \
+	malformed/report/mutation_summary.tsv \
+	malformed/report/mutation_results.tsv
+
+# malformed frame/header samples: every input must be rejected with a
+# return code and a byte offset, and the legal baseline must still decode.
+malformed_test_SOURCES = malformed/malformed_test.c
+malformed_test_LDADD = $(THEORADEC_LIBS)
+malformed_test_CFLAGS = $(OGG_CFLAGS) \
+	-DSAMPLEDIR=\"$(abs_srcdir)/malformed/samples\"
 # dummy call tests for the current api
 noop_SOURCES = noop.c
 noop_LDADD = $(THEORAENC_LIBS)

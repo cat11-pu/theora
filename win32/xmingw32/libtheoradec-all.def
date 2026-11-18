@@ -34,10 +34,12 @@ EXPORTS
 	th_version_number @ 23
 
 	th_decode_headerin @ 24
+	th_decode_headerin_ex @ 43
 	th_decode_alloc @ 25
 	th_setup_free @ 26
 	th_decode_ctl @ 27
 	th_decode_packetin @ 28
+	th_decode_packetin_ex @ 44
 	th_decode_ycbcr_out @ 29
 	th_decode_free @ 30
 

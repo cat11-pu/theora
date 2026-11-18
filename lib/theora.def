@@ -30,10 +30,12 @@ EXPORTS
 	th_version_string
 	th_version_number
 	th_decode_headerin
+	th_decode_headerin_ex
 	th_decode_alloc
 	th_setup_free
 	th_decode_ctl
 	th_decode_packetin
+	th_decode_packetin_ex
 	th_decode_ycbcr_out
 	th_decode_free
 	th_packet_isheader

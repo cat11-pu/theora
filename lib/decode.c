@@ -390,6 +390,7 @@ static int oc_dec_init(oc_dec_ctx *_dec,const th_info *_info,
     oc_state_clear(&_dec->state);
     return TH_EFAULT;
   }
+  _dec->dct_tokens_capacity=129*_dec->state.nfrags;
   for(qi=0;qi<64;qi++)for(pli=0;pli<3;pli++)for(qti=0;qti<2;qti++){
     _dec->state.dequant_tables[qi][pli][qti]=
      _dec->state.dequant_table_data[qi][pli][qti];
@@ -411,6 +412,7 @@ static int oc_dec_init(oc_dec_ctx *_dec,const th_info *_info,
    sizeof(_dec->state.loop_filter_limits));
   oc_dec_accel_init(_dec);
   _dec->pp_level=OC_PP_LEVEL_DISABLED;
+  _dec->error_offset=0;
   _dec->dc_qis=NULL;
   _dec->variances=NULL;
   _dec->pp_frame_data=NULL;
@@ -793,17 +795,21 @@ static const ogg_int16_t OC_CLC_MV_COMP_TREE[65]={
 };
 
 
-static oc_mv oc_mv_unpack(oc_pack_buf *_opb,const ogg_int16_t *_tree){
+static int oc_mv_unpack(oc_pack_buf *_opb,const ogg_int16_t *_tree,oc_mv *_mv){
   int dx;
   int dy;
   dx=oc_huff_token_decode(_opb,_tree)-32;
   dy=oc_huff_token_decode(_opb,_tree)-32;
-  return OC_MV(dx,dy);
+  if(oc_pack_overrun(_opb)||dx<-31||dx>31||dy<-31||dy>31){
+    return TH_EBADPACKET;
+  }
+  *_mv=OC_MV(dx,dy);
+  return 0;
 }
 
 /*Unpacks the list of motion vectors for INTER frames, and propagtes the macro
    block modes and motion vectors to the individual fragments.*/
-static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
+static int oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
   const oc_mb_map        *mb_maps;
   const signed char      *mb_modes;
   oc_set_chroma_mvs_func  set_chroma_mvs;
@@ -818,6 +824,7 @@ static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
   size_t                  nmbs;
   size_t                  mbi;
   long                    val;
+  int                     ret;
   set_chroma_mvs=OC_SET_CHROMA_MVS_TABLE[_dec->state.info.pixel_fmt];
   val=oc_pack_read1(&_dec->opb);
   mv_comp_tree=val?OC_CLC_MV_COMP_TREE:OC_VLC_MV_COMP_TREE;
@@ -844,10 +851,13 @@ static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
         prior_mv=last_mv;
         for(bi=0;bi<4;bi++){
           fragi=mb_maps[mbi][0][bi];
+          if(fragi<0||fragi>=_dec->state.nfrags)return TH_EBADPACKET;
           if(frags[fragi].coded){
             frags[fragi].refi=OC_FRAME_PREV;
             frags[fragi].mb_mode=OC_MODE_INTER_MV_FOUR;
-            lbmvs[bi]=last_mv=oc_mv_unpack(&_dec->opb,mv_comp_tree);
+            ret=oc_mv_unpack(&_dec->opb,mv_comp_tree,&lbmvs[bi]);
+            if(ret<0)return ret;
+            last_mv=lbmvs[bi];
             frag_mvs[fragi]=lbmvs[bi];
           }
           else lbmvs[bi]=0;
@@ -857,6 +867,7 @@ static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
           mapi=map_idxs[mapii];
           bi=mapi&3;
           fragi=mb_maps[mbi][mapi>>2][bi];
+          if(fragi<0||fragi>=_dec->state.nfrags)return TH_EBADPACKET;
           if(frags[fragi].coded){
             frags[fragi].refi=OC_FRAME_PREV;
             frags[fragi].mb_mode=OC_MODE_INTER_MV_FOUR;
@@ -868,7 +879,9 @@ static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
         switch(mb_mode){
           case OC_MODE_INTER_MV:{
             prior_mv=last_mv;
-            last_mv=mbmv=oc_mv_unpack(&_dec->opb,mv_comp_tree);
+            ret=oc_mv_unpack(&_dec->opb,mv_comp_tree,&mbmv);
+            if(ret<0)return ret;
+            last_mv=mbmv;
           }break;
           case OC_MODE_INTER_MV_LAST:mbmv=last_mv;break;
           case OC_MODE_INTER_MV_LAST2:{
@@ -877,7 +890,8 @@ static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
             last_mv=mbmv;
           }break;
           case OC_MODE_GOLDEN_MV:{
-            mbmv=oc_mv_unpack(&_dec->opb,mv_comp_tree);
+            ret=oc_mv_unpack(&_dec->opb,mv_comp_tree,&mbmv);
+            if(ret<0)return ret;
           }break;
           default:mbmv=0;break;
         }
@@ -887,6 +901,7 @@ static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
         do{
           mapi=map_idxs[mapii];
           fragi=mb_maps[mbi][mapi>>2][mapi&3];
+          if(fragi<0||fragi>=_dec->state.nfrags)return TH_EBADPACKET;
           if(frags[fragi].coded){
             frags[fragi].refi=refi;
             frags[fragi].mb_mode=mb_mode;
@@ -897,6 +912,7 @@ static void oc_dec_mv_unpack_and_frag_modes_fill(oc_dec_ctx *_dec){
       }
     }
   }
+  return oc_pack_overrun(&_dec->opb)?TH_EBADPACKET:0;
 }
 
 static void oc_dec_block_qis_unpack(oc_dec_ctx *_dec){
@@ -993,6 +1009,7 @@ static void oc_dec_block_qis_unpack(oc_dec_ctx *_dec){
 static ptrdiff_t oc_dec_dc_coeff_unpack(oc_dec_ctx *_dec,int _huff_idxs[2],
  ptrdiff_t _ntoks_left[3][64]){
   unsigned char   *dct_tokens;
+  ptrdiff_t        dct_tokens_capacity;
   oc_fragment     *frags;
   const ptrdiff_t *coded_fragis;
   ptrdiff_t        ncoded_fragis;
@@ -1001,6 +1018,7 @@ static ptrdiff_t oc_dec_dc_coeff_unpack(oc_dec_ctx *_dec,int _huff_idxs[2],
   ptrdiff_t        ti;
   int              pli;
   dct_tokens=_dec->dct_tokens;
+  dct_tokens_capacity=_dec->dct_tokens_capacity;
   frags=_dec->state.frags;
   coded_fragis=_dec->state.coded_fragis;
   ncoded_fragis=fragii=eobs=ti=0;
@@ -1024,8 +1042,11 @@ static ptrdiff_t oc_dec_dc_coeff_unpack(oc_dec_ctx *_dec,int _huff_idxs[2],
       int cw;
       int eb;
       int skip;
+      if(oc_pack_overrun(&_dec->opb))return TH_EBADPACKET;
       token=oc_huff_token_decode(&_dec->opb,
        _dec->huff_tables[_huff_idxs[pli+1>>1]]);
+      if(token<0||token>=92)return TH_EBADPACKET;
+      if(ti>dct_tokens_capacity-3)return TH_EBADPACKET;
       dct_tokens[ti++]=(unsigned char)token;
       if(OC_DCT_TOKEN_NEEDS_MORE(token)){
         eb=(int)oc_pack_read(&_dec->opb,
@@ -1047,6 +1068,7 @@ static ptrdiff_t oc_dec_dc_coeff_unpack(oc_dec_ctx *_dec,int _huff_idxs[2],
       else{
         int coeff;
         skip=(unsigned char)(cw>>OC_DCT_CW_RLEN_SHIFT);
+        if(skip>=64)return TH_EBADPACKET;
         cw^=-(cw&1<<OC_DCT_CW_FLIP_BIT);
         coeff=cw>>OC_DCT_CW_MAG_SHIFT;
         if(skip)coeff=0;
@@ -1062,6 +1084,7 @@ static ptrdiff_t oc_dec_dc_coeff_unpack(oc_dec_ctx *_dec,int _huff_idxs[2],
        accounted for by runs started in this coefficient.*/
     for(rli=64;rli-->0;)_ntoks_left[pli][rli]-=run_counts[rli];
   }
+  if(oc_pack_overrun(&_dec->opb))return TH_EBADPACKET;
   _dec->dct_tokens_count=ti;
   return eobs;
 }
@@ -1076,12 +1099,15 @@ static ptrdiff_t oc_dec_dc_coeff_unpack(oc_dec_ctx *_dec,int _huff_idxs[2],
   _eobs:       The length of any outstanding EOB run from previous
                 coefficients.
   Return: The length of any outstanding EOB run.*/
-static int oc_dec_ac_coeff_unpack(oc_dec_ctx *_dec,int _zzi,int _huff_idxs[2],
+static ptrdiff_t oc_dec_ac_coeff_unpack(oc_dec_ctx *_dec,int _zzi,
+ int _huff_idxs[2],
  ptrdiff_t _ntoks_left[3][64],ptrdiff_t _eobs){
   unsigned char *dct_tokens;
+  ptrdiff_t      dct_tokens_capacity;
   ptrdiff_t      ti;
   int            pli;
   dct_tokens=_dec->dct_tokens;
+  dct_tokens_capacity=_dec->dct_tokens_capacity;
   ti=_dec->dct_tokens_count;
   for(pli=0;pli<3;pli++){
     ptrdiff_t run_counts[64];
@@ -1091,6 +1117,7 @@ static int oc_dec_ac_coeff_unpack(oc_dec_ctx *_dec,int _zzi,int _huff_idxs[2],
     int       rli;
     _dec->eob_runs[pli][_zzi]=_eobs;
     _dec->ti0[pli][_zzi]=ti;
+    if(_ntoks_left[pli][_zzi]<0)return TH_EBADPACKET;
     ntoks_left=_ntoks_left[pli][_zzi];
     memset(run_counts,0,sizeof(run_counts));
     eob_count=0;
@@ -1100,10 +1127,13 @@ static int oc_dec_ac_coeff_unpack(oc_dec_ctx *_dec,int _zzi,int _huff_idxs[2],
       int cw;
       int eb;
       int skip;
+      if(oc_pack_overrun(&_dec->opb))return TH_EBADPACKET;
       ntoks+=_eobs;
       eob_count+=_eobs;
       token=oc_huff_token_decode(&_dec->opb,
        _dec->huff_tables[_huff_idxs[pli+1>>1]]);
+      if(token<0||token>=92)return TH_EBADPACKET;
+      if(ti>dct_tokens_capacity-3)return TH_EBADPACKET;
       dct_tokens[ti++]=(unsigned char)token;
       if(OC_DCT_TOKEN_NEEDS_MORE(token)){
         eb=(int)oc_pack_read(&_dec->opb,
@@ -1115,6 +1145,7 @@ static int oc_dec_ac_coeff_unpack(oc_dec_ctx *_dec,int _zzi,int _huff_idxs[2],
       else eb=0;
       cw=OC_DCT_CODE_WORD[token]+eb;
       skip=(unsigned char)(cw>>OC_DCT_CW_RLEN_SHIFT);
+      if(skip>=64)return TH_EBADPACKET;
       _eobs=cw>>OC_DCT_CW_EOB_SHIFT&0xFFF;
       if(cw==OC_DCT_CW_FINISH)_eobs=OC_DCT_EOB_FINISH;
       if(_eobs==0){
@@ -1134,6 +1165,7 @@ static int oc_dec_ac_coeff_unpack(oc_dec_ctx *_dec,int _zzi,int _huff_idxs[2],
        accounted for by runs started in this coefficient.*/
     for(rli=64-_zzi;rli-->0;)_ntoks_left[pli][_zzi+rli]-=run_counts[rli];
   }
+  if(oc_pack_overrun(&_dec->opb))return TH_EBADPACKET;
   _dec->dct_tokens_count=ti;
   return _eobs;
 }
@@ -1161,7 +1193,7 @@ static int oc_dec_ac_coeff_unpack(oc_dec_ctx *_dec,int _zzi,int _huff_idxs[2],
   This lets color conversion, etc., be done as soon as a full MCU (one or
    two super block rows) is decoded, while the image data is still in cache.*/
 
-static void oc_dec_residual_tokens_unpack(oc_dec_ctx *_dec){
+static int oc_dec_residual_tokens_unpack(oc_dec_ctx *_dec){
   static const unsigned char OC_HUFF_LIST_MAX[5]={1,6,15,28,64};
   ptrdiff_t  ntoks_left[3][64];
   int        huff_idxs[2];
@@ -1179,6 +1211,7 @@ static void oc_dec_residual_tokens_unpack(oc_dec_ctx *_dec){
   huff_idxs[1]=(int)val;
   _dec->eob_runs[0][0]=0;
   eobs=oc_dec_dc_coeff_unpack(_dec,huff_idxs,ntoks_left);
+  if(eobs<0)return (int)eobs;
 #if defined(HAVE_CAIRO)
   _dec->telemetry_dc_bytes=oc_pack_bytes_left(&_dec->opb);
 #endif
@@ -1192,12 +1225,15 @@ static void oc_dec_residual_tokens_unpack(oc_dec_ctx *_dec){
     huff_idxs[1]+=16;
     for(;zzi<OC_HUFF_LIST_MAX[hgi];zzi++){
       eobs=oc_dec_ac_coeff_unpack(_dec,zzi,huff_idxs,ntoks_left,eobs);
+      if(eobs<0)return (int)eobs;
     }
   }
   /*TODO: eobs should be exactly zero, or 4096 or greater.
     The second case occurs when an EOB run of size zero is encountered, which
      gets treated as an infinite EOB run (where infinity is PTRDIFF_MAX).
     If neither of these conditions holds, then a warning should be issued.*/
+  if(oc_pack_overrun(&_dec->opb))return TH_EBADPACKET;
+  return 0;
 }
 
 
@@ -1508,9 +1544,10 @@ void oc_dec_dc_unpredict_mcu_plane_c(oc_dec_ctx *_dec,
   The token lists for each color plane and coefficient should also be filled
    in, along with initial token offsets, extra bits offsets, and EOB run
    counts.*/
-static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
+static int oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
  oc_dec_pipeline_state *_pipe,int _pli){
   unsigned char       *dct_tokens;
+  ptrdiff_t            dct_tokens_capacity;
   const unsigned char *dct_fzig_zag;
   ogg_uint16_t         dc_quant[2];
   const oc_fragment   *frags;
@@ -1521,6 +1558,7 @@ static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
   ptrdiff_t           *eob_runs;
   int                  qti;
   dct_tokens=_dec->dct_tokens;
+  dct_tokens_capacity=_dec->dct_tokens_capacity;
   dct_fzig_zag=_dec->state.opt_data.dct_fzig_zag;
   frags=_dec->state.frags;
   coded_fragis=_pipe->coded_fragis[_pli];
@@ -1551,16 +1589,20 @@ static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
         int       coeff;
         int       lti;
         lti=ti[zzi];
+        if(lti<0||lti>=dct_tokens_capacity)return TH_EBADPACKET;
         token=dct_tokens[lti++];
+        if(token>=92)return TH_EBADPACKET;
         cw=OC_DCT_CODE_WORD[token];
         /*These parts could be done branchless, but the branches are fairly
            predictable and the C code translates into more than a few
            instructions, so it's worth it to avoid them.*/
         if(OC_DCT_TOKEN_NEEDS_MORE(token)){
+          if(lti>=dct_tokens_capacity)return TH_EBADPACKET;
           cw+=dct_tokens[lti++]<<OC_DCT_TOKEN_EB_POS(token);
         }
         eob=cw>>OC_DCT_CW_EOB_SHIFT&0xFFF;
         if(token==OC_DCT_TOKEN_FAT_EOB){
+          if(lti>=dct_tokens_capacity)return TH_EBADPACKET;
           eob+=dct_tokens[lti++]<<8;
           if(eob==0)eob=OC_DCT_EOB_FINISH;
         }
@@ -1570,9 +1612,22 @@ static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
         eob_runs[zzi]=eob;
         ti[zzi]=lti;
         zzi+=rlen;
-        _pipe->dct_coeffs[dct_fzig_zag[zzi]]=
-         (ogg_int16_t)(coeff*(int)ac_quant[zzi]);
+        if(zzi>=64){
+          /*The zig-zag table maps indices past the end of the block to a
+             dumping ground so that malformed runs cannot overflow the
+             coefficient buffer. Keep that behavior, but do not index the
+             64-entry quantizer table with an out-of-range coefficient.*/
+          if(zzi>=128)return TH_EBADPACKET;
+          _pipe->dct_coeffs[dct_fzig_zag[zzi]]=0;
+        }
+        else{
+          _pipe->dct_coeffs[dct_fzig_zag[zzi]]=
+           (ogg_int16_t)(coeff*(int)ac_quant[zzi]);
+        }
         zzi+=!eob;
+        /*A token that advances neither the coefficient index nor an EOB run
+           would make this loop spin forever on corrupt input.*/
+        if(eob==0&&zzi==last_zzi)return TH_EBADPACKET;
       }
     }
     /*TODO: zzi should be exactly 64 here.
@@ -1604,6 +1659,7 @@ static void oc_dec_frags_recon_mcu_plane(oc_dec_ctx *_dec,
      _dec->state.ref_ystride[_pli],_pipe->uncoded_fragis[_pli],
      _pipe->nuncoded_fragis[_pli],_dec->state.frag_buf_offs);
   }
+  return 0;
 }
 
 /*Filter a horizontal block edge.*/
@@ -2015,6 +2071,12 @@ int th_decode_ctl(th_dec_ctx *_dec,int _req,void *_buf,
     cb=(th_stripe_callback *)_buf;
     _dec->stripe_cb.ctx=cb->ctx;
     _dec->stripe_cb.stripe_decoded=cb->stripe_decoded;
+    return 0;
+  }break;
+  case TH_DECCTL_GET_ERROR_OFFSET:{
+    if(_dec==NULL||_buf==NULL)return TH_EFAULT;
+    if(_buf_sz!=sizeof(size_t))return TH_EINVAL;
+    *(size_t *)_buf=_dec->error_offset;
     return 0;
   }break;
 #ifdef HAVE_CAIRO
@@ -2737,10 +2799,49 @@ static void oc_render_telemetry(th_dec_ctx *_dec,th_ycbcr_buffer _ycbcr,
 }
 #endif
 
+/*Records the byte offset at which the current packet was rejected.*/
+static int oc_dec_packet_error(oc_dec_ctx *_dec,int _ret){
+  _dec->error_offset=(size_t)oc_pack_tell(&_dec->opb);
+  return _ret;
+}
+
+/*Verifies that every coded fragment has a usable reference and, for motion
+   compensated fragments, a motion vector inside the format's legal range.
+  This is a final line of defense before reconstruction dereferences a
+   reference frame or indexes the motion vector tables.*/
+static int oc_dec_validate_frag_refs(oc_dec_ctx *_dec){
+  const oc_fragment *frags;
+  const ptrdiff_t   *coded_fragis;
+  ptrdiff_t          ncoded_fragis;
+  ptrdiff_t          fragii;
+  frags=_dec->state.frags;
+  coded_fragis=_dec->state.coded_fragis;
+  ncoded_fragis=_dec->state.ntotal_coded_fragis;
+  for(fragii=0;fragii<ncoded_fragis;fragii++){
+    ptrdiff_t fragi;
+    int       refi;
+    fragi=coded_fragis[fragii];
+    if(fragi<0||fragi>=_dec->state.nfrags)return TH_EBADPACKET;
+    refi=frags[fragi].refi;
+    if(refi<OC_FRAME_GOLD||refi>OC_FRAME_SELF)return TH_EBADPACKET;
+    if(refi!=OC_FRAME_SELF){
+      int   dx;
+      int   dy;
+      oc_mv mv;
+      mv=_dec->state.frag_mvs[fragi];
+      dx=OC_MV_X(mv);
+      dy=OC_MV_Y(mv);
+      if(dx<-31||dx>31||dy<-31||dy>31)return TH_EBADPACKET;
+    }
+  }
+  return 0;
+}
+
 int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
  ogg_int64_t *_granpos){
   int ret;
   if(_dec==NULL||_op==NULL)return TH_EFAULT;
+  _dec->error_offset=0;
   /*A completely empty packet indicates a dropped frame and is treated exactly
      like an inter frame with no coded blocks.*/
   if(_op->bytes==0){
@@ -2750,9 +2851,17 @@ int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
   else{
     oc_pack_readinit(&_dec->opb,_op->packet,_op->bytes);
     ret=oc_dec_frame_header_unpack(_dec);
-    if(ret<0)return ret;
+    if(ret<0)return oc_dec_packet_error(_dec,ret);
+    if(oc_pack_overrun(&_dec->opb)){
+      return oc_dec_packet_error(_dec,TH_EBADPACKET);
+    }
     if(_dec->state.frame_type==OC_INTRA_FRAME)oc_dec_mark_all_intra(_dec);
-    else oc_dec_coded_flags_unpack(_dec);
+    else{
+      oc_dec_coded_flags_unpack(_dec);
+      if(oc_pack_overrun(&_dec->opb)){
+        return oc_dec_packet_error(_dec,TH_EBADPACKET);
+      }
+    }
   }
   /*If there have been no reference frames, and we need one, initialize one.*/
   if(_dec->state.frame_type!=OC_INTRA_FRAME&&
@@ -2808,19 +2917,29 @@ int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
       _dec->telemetry_coding_bytes=oc_pack_bytes_left(&_dec->opb);
 #endif
       oc_dec_mb_modes_unpack(_dec);
+      if(oc_pack_overrun(&_dec->opb)){
+        return oc_dec_packet_error(_dec,TH_EBADPACKET);
+      }
 #if defined(HAVE_CAIRO)
       _dec->telemetry_mode_bytes=oc_pack_bytes_left(&_dec->opb);
 #endif
-      oc_dec_mv_unpack_and_frag_modes_fill(_dec);
+      ret=oc_dec_mv_unpack_and_frag_modes_fill(_dec);
+      if(ret<0)return oc_dec_packet_error(_dec,ret);
 #if defined(HAVE_CAIRO)
       _dec->telemetry_mv_bytes=oc_pack_bytes_left(&_dec->opb);
 #endif
     }
     oc_dec_block_qis_unpack(_dec);
+    if(oc_pack_overrun(&_dec->opb)){
+      return oc_dec_packet_error(_dec,TH_EBADPACKET);
+    }
 #if defined(HAVE_CAIRO)
     _dec->telemetry_qi_bytes=oc_pack_bytes_left(&_dec->opb);
 #endif
-    oc_dec_residual_tokens_unpack(_dec);
+    ret=oc_dec_residual_tokens_unpack(_dec);
+    if(ret<0)return oc_dec_packet_error(_dec,ret);
+    ret=oc_dec_validate_frag_refs(_dec);
+    if(ret<0)return oc_dec_packet_error(_dec,ret);
     /*Update granule position.
       This must be done before the striped decode callbacks so that the
        application knows what to do with the frame data.*/
@@ -2874,7 +2993,8 @@ int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
         _dec->pipe.fragy_end[pli]=OC_MINI(fplane->nvfrags,
          _dec->pipe.fragy0[pli]+(_dec->pipe.mcu_nvfrags>>frag_shift));
         oc_dec_dc_unpredict_mcu_plane(_dec,&_dec->pipe,pli);
-        oc_dec_frags_recon_mcu_plane(_dec,&_dec->pipe,pli);
+        ret=oc_dec_frags_recon_mcu_plane(_dec,&_dec->pipe,pli);
+        if(ret<0)return oc_dec_packet_error(_dec,ret);
         sdelay=edelay=0;
         if(_dec->pipe.loop_filter){
           sdelay+=notstart;
@@ -2983,6 +3103,15 @@ int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
 #endif
     return 0;
   }
+}
+
+int th_decode_packetin_ex(th_dec_ctx *_dec,const ogg_packet *_op,
+ ogg_int64_t *_granpos,size_t *_offset){
+  int ret;
+  if(_offset!=NULL)*_offset=0;
+  ret=th_decode_packetin(_dec,_op,_granpos);
+  if(_offset!=NULL)*_offset=ret<0&&_dec!=NULL?_dec->error_offset:0;
+  return ret;
 }
 
 int th_decode_ycbcr_out(th_dec_ctx *_dec,th_ycbcr_buffer _ycbcr){

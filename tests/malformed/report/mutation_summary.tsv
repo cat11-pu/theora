@@ -1,0 +1,5 @@
+suite	cases	rejected	accepted	crashes	sanitizer	timeouts	leaks
+truncation+random_frames	4217	3553	664	0	0	0	0
+setup_random	300000	-	-	0	0	0	0
+frame_random	200000	-	-	0	0	0	0
+legal_streams	15	0	15	0	0	0	0

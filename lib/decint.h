@@ -120,6 +120,8 @@ struct th_dec_ctx{
      be emitted, reaches 0 when the codec is ready for input, and goes to 1
      when a frame has been processed and a data packet is ready.*/
   int                    packet_state;
+  /*The byte offset of the first error in the most recent data packet.*/
+  size_t                 error_offset;
   /*Buffer in which to assemble packets.*/
   oc_pack_buf            opb;
   /*Huffman decode trees.*/
@@ -131,6 +133,8 @@ struct th_dec_ctx{
   ptrdiff_t              eob_runs[3][64];
   /*The DCT token lists.*/
   unsigned char         *dct_tokens;
+  /*The number of bytes available in dct_tokens.*/
+  ptrdiff_t              dct_tokens_capacity;
   /*The extra bits associated with DCT tokens.*/
   unsigned char         *extra_bits;
   /*The number of dct tokens unpacked so far.*/

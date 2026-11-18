@@ -29,10 +29,12 @@ _theora_comment_clear
 _th_version_string
 _th_version_number
 _th_decode_headerin
+_th_decode_headerin_ex
 _th_decode_alloc
 _th_setup_free
 _th_decode_ctl
 _th_decode_packetin
+_th_decode_packetin_ex
 _th_decode_ycbcr_out
 _th_decode_free
 _th_packet_isheader

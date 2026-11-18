@@ -51,11 +51,13 @@ typedef struct oc_pack_buf oc_pack_buf;
 
 
 struct oc_pack_buf{
+  const unsigned char *start;
   const unsigned char *stop;
   const unsigned char *ptr;
   oc_pb_window         window;
   int                  bits;
   int                  eof;
+  long                 nbits_read;
 };
 
 void oc_pack_readinit(oc_pack_buf *_b,unsigned char *_buf,long _bytes);
@@ -66,6 +68,15 @@ long oc_pack_read_c(oc_pack_buf *_b,int _bits);
 int oc_pack_read1_c(oc_pack_buf *_b);
 /* returns -1 for read beyond EOF, or the number of whole bytes available */
 long oc_pack_bytes_left(oc_pack_buf *_b);
+/*Returns the byte offset of the current read position.
+  If an over-read has already occurred, returns the byte offset of the first
+   byte past the end of the buffer.*/
+long oc_pack_tell(oc_pack_buf *_b);
+/*Returns non-zero if more bits have actually been consumed than the buffer
+   contains.
+  Unlike the eof flag, this is not set by look-ahead reads that are satisfied
+   by the zero padding in a legal final byte.*/
+int oc_pack_overrun(oc_pack_buf *_b);
 
 /*These two functions are implemented locally in huffdec.c*/
 /*Read in bits without advancing the bitptr.

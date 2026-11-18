@@ -76,6 +76,8 @@ tests/*.trs
 tests/comment
 tests/comment_theora
 tests/comment_theoradec
+tests/malformed_test
+tests/.libs/
 tests/granulepos
 tests/granulepos_theora
 tests/granulepos_theoraenc

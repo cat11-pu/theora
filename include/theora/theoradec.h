@@ -103,6 +103,14 @@ extern "C" {
 /**Sets the bitstream breakdown visualization mode. Set to 0 to disable
  * displaying bitstream breakdown.*/
 #define TH_DECCTL_SET_TELEMETRY_BITS (15)
+/**Gets the byte offset of the first error in the most recent data packet.
+ * This is valid after th_decode_packetin() or th_decode_packetin_ex()
+ *  returns a negative value.
+ *
+ * \param[out] _buf <tt>size_t</tt>: The offset from the start of the packet.
+ * \retval TH_EFAULT  \a _dec_ctx or \a _buf is <tt>NULL</tt>.
+ * \retval TH_EINVAL  \a _buf_sz is not <tt>sizeof(size_t)</tt>.*/
+#define TH_DECCTL_GET_ERROR_OFFSET (17)
 /*@}*/
 
 
@@ -233,6 +241,14 @@ typedef struct th_setup_info th_setup_info;
  */
 extern int th_decode_headerin(th_info *_info,th_comment *_tc,
  th_setup_info **_setup,ogg_packet *_op);
+/**Decodes a header packet and reports the byte offset of the first error.
+ * This behaves exactly like th_decode_headerin(), but if a negative value is
+ *  returned, \a _offset is set to the byte offset in \a _op at which the
+ *  decoder detected the error.
+ * \param _offset Returns the byte offset of the first error, or zero on
+ *                 success. This may be <tt>NULL</tt>.*/
+extern int th_decode_headerin_ex(th_info *_info,th_comment *_tc,
+ th_setup_info **_setup,ogg_packet *_op,size_t *_offset);
 /**Allocates a decoder instance.
  *
  * <b>Security Warning:</b> The Theora format supports very large frame sizes,
@@ -300,6 +316,14 @@ extern int th_decode_ctl(th_dec_ctx *_dec,int _req,void *_buf,
  *                        library does not support.*/
 extern int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
  ogg_int64_t *_granpos);
+/**Submits a packet and reports the byte offset of the first error.
+ * This behaves exactly like th_decode_packetin(), but if a negative value is
+ *  returned, \a _offset is set to the byte offset in \a _op at which the
+ *  decoder detected the error.
+ * \param _offset Returns the byte offset of the first error, or zero on
+ *                 success. This may be <tt>NULL</tt>.*/
+extern int th_decode_packetin_ex(th_dec_ctx *_dec,const ogg_packet *_op,
+ ogg_int64_t *_granpos,size_t *_offset);
 /**Outputs the next available frame of decoded Y'CbCr data.
  * If a striped decode callback has been set with #TH_DECCTL_SET_STRIPE_CB,
  *  then the application does not need to call this function.

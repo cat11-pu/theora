@@ -55,6 +55,8 @@ int oc_quant_params_unpack(oc_pack_buf *_opb,th_quant_info *_qinfo){
   }
   val=oc_pack_read(_opb,9);
   nbase_mats=(int)val+1;
+  /*The format allows at most 384 base matrices.*/
+  if(nbase_mats>384)return TH_EBADHEADER;
   base_mats=_ogg_malloc(nbase_mats*sizeof(base_mats[0]));
   if(base_mats==NULL)return TH_EFAULT;
   for(bmi=0;bmi<nbase_mats;bmi++){
@@ -62,6 +64,10 @@ int oc_quant_params_unpack(oc_pack_buf *_opb,th_quant_info *_qinfo){
       val=oc_pack_read(_opb,8);
       base_mats[bmi][ci]=(unsigned char)val;
     }
+  }
+  if(_opb->eof){
+    _ogg_free(base_mats);
+    return TH_EBADHEADER;
   }
   nbits=oc_ilog(nbase_mats-1);
   for(i=0;i<6;i++){
@@ -99,9 +105,17 @@ int oc_quant_params_unpack(oc_pack_buf *_opb,th_quant_info *_qinfo){
     indices[0]=(int)val;
     for(qi=qri=0;qi<63;){
       val=oc_pack_read(_opb,oc_ilog(62-qi));
+      if(_opb->eof){
+        _ogg_free(base_mats);
+        return TH_EBADHEADER;
+      }
       sizes[qri]=(int)val+1;
       qi+=(int)val+1;
       val=oc_pack_read(_opb,nbits);
+      if(_opb->eof){
+        _ogg_free(base_mats);
+        return TH_EBADHEADER;
+      }
       indices[++qri]=(int)val;
     }
     /*Note: The caller is responsible for cleaning up any partially
@@ -138,6 +152,10 @@ int oc_quant_params_unpack(oc_pack_buf *_opb,th_quant_info *_qinfo){
       memcpy(qrbms[qri],base_mats[bmi],sizeof(qrbms[qri]));
     }
     while(qri-->0);
+  }
+  if(_opb->eof){
+    _ogg_free(base_mats);
+    return TH_EBADHEADER;
   }
   _ogg_free(base_mats);
   return 0;

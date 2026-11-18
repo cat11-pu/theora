@@ -1,0 +1,7 @@
+sample	stage	packet	offset	return_code	result
+valid.tpk	-	-	0	0	decoded
+truncated_frame.tpk	frame	3	100	-24	rejected
+bad_quant_nbms.tpk	header	2	185	-20	rejected
+bad_quant_bmi.tpk	header	2	957	-20	rejected
+bad_quant_truncated.tpk	header	2	200	-20	rejected
+bad_mv_truncated.tpk	frame	4	16	-24	rejected

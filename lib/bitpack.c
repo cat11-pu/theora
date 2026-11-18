@@ -23,6 +23,7 @@
 
 void oc_pack_readinit(oc_pack_buf *_b,unsigned char *_buf,long _bytes){
   memset(_b,0,sizeof(*_b));
+  _b->start=_buf;
   _b->ptr=_buf;
   _b->stop=_buf+_bytes;
 }
@@ -67,6 +68,7 @@ int oc_pack_look1(oc_pack_buf *_b){
 void oc_pack_adv1(oc_pack_buf *_b){
   _b->window<<=1;
   _b->bits--;
+  _b->nbits_read++;
 }
 
 /*Here we assume that 0<=_bits&&_bits<=32.*/
@@ -87,6 +89,7 @@ long oc_pack_read_c(oc_pack_buf *_b,int _bits){
   window<<=_bits-1;
   _b->window=window;
   _b->bits=available;
+  _b->nbits_read+=_bits;
   return result;
 }
 
@@ -105,10 +108,24 @@ int oc_pack_read1_c(oc_pack_buf *_b){
   window<<=1;
   _b->window=window;
   _b->bits=available;
+  _b->nbits_read++;
   return result;
 }
 
 long oc_pack_bytes_left(oc_pack_buf *_b){
   if(_b->eof)return -1;
   return _b->stop-_b->ptr+(_b->bits>>3);
+}
+
+long oc_pack_tell(oc_pack_buf *_b){
+  long bytes;
+  bytes=_b->stop-_b->start;
+  if(_b->eof)return bytes;
+  bytes=_b->nbits_read>>3;
+  if(bytes>_b->stop-_b->start)return (long)(_b->stop-_b->start);
+  return bytes;
+}
+
+int oc_pack_overrun(oc_pack_buf *_b){
+  return _b->nbits_read>(long)(_b->stop-_b->start)*8;
 }

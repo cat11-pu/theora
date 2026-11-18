@@ -22,8 +22,8 @@
 
 /*Only used for fuzzing.*/
 #if defined(HAVE_MEMORY_CONSTRAINT)
-static const int MAX_FUZZING_WIDTH = 16384;
-static const int MAX_FUZZING_HEIGHT = 16384;
+static const ogg_uint32_t MAX_FUZZING_WIDTH = 16384;
+static const ogg_uint32_t MAX_FUZZING_HEIGHT = 16384;
 #endif
 
 
@@ -88,7 +88,8 @@ static int oc_info_unpack(oc_pack_buf *_opb,th_info *_info){
     return TH_EBADHEADER;
   }
 #if defined(HAVE_MEMORY_CONSTRAINT)
-  if(_info->frame_width>=MAX_FUZZING_WIDTH&&_info->frame_height>=MAX_FUZZING_HEIGHT){
+  if(_info->frame_width>=MAX_FUZZING_WIDTH||
+   _info->frame_height>=MAX_FUZZING_HEIGHT){
     return TH_EBADHEADER;
   }
 #endif
@@ -262,13 +263,27 @@ static int oc_dec_headerin(oc_pack_buf *_opb,th_info *_info,
 /*Decodes one header packet.
   This should be called repeatedly with the packets at the beginning of the
    stream until it returns 0.*/
+int th_decode_headerin_ex(th_info *_info,th_comment *_tc,
+ th_setup_info **_setup,ogg_packet *_op,size_t *_offset){
+  oc_pack_buf opb;
+  int          ret;
+  if(_op==NULL){
+    if(_offset!=NULL)*_offset=0;
+    return TH_EBADHEADER;
+  }
+  if(_info==NULL){
+    if(_offset!=NULL)*_offset=0;
+    return TH_EFAULT;
+  }
+  oc_pack_readinit(&opb,_op->packet,_op->bytes);
+  ret=oc_dec_headerin(&opb,_info,_tc,_setup,_op);
+  if(_offset!=NULL)*_offset=ret<0?(size_t)oc_pack_tell(&opb):0;
+  return ret;
+}
+
 int th_decode_headerin(th_info *_info,th_comment *_tc,
  th_setup_info **_setup,ogg_packet *_op){
-  oc_pack_buf opb;
-  if(_op==NULL)return TH_EBADHEADER;
-  if(_info==NULL)return TH_EFAULT;
-  oc_pack_readinit(&opb,_op->packet,_op->bytes);
-  return oc_dec_headerin(&opb,_info,_tc,_setup,_op);
+  return th_decode_headerin_ex(_info,_tc,_setup,_op,NULL);
 }
 
 void th_setup_free(th_setup_info *_setup){
