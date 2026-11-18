@@ -1,0 +1,6 @@
+# Known-benign encoder UB (left shift of negative values) in libtheora's
+# encoder, hit only while generating the test corpus. Decoder paths are
+# NOT suppressed: any UB there fails the property test.
+shift-base:*lib/analyze.c
+shift-base:*lib/mcenc.c
+shift-base:*lib/tokenize.c
