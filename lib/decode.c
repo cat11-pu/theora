@@ -2990,3 +2990,149 @@ int th_decode_ycbcr_out(th_dec_ctx *_dec,th_ycbcr_buffer _ycbcr){
   oc_ycbcr_buffer_flip(_ycbcr,_dec->pp_frame_buf);
   return 0;
 }
+
+/*Computes the bounds of one region plane.
+  Chroma bounds use the same floor/ceil rule as the full-frame crop path.*/
+static void oc_dec_region_plane_bounds(const th_info *_info,
+ const th_region *_region,int _pli,int *_x0,int *_y0,int *_w,int *_h){
+  int hdec;
+  int vdec;
+  int x0;
+  int x1;
+  int y0;
+  int y1;
+  hdec=_pli!=0&&!(_info->pixel_fmt&1);
+  vdec=_pli!=0&&!(_info->pixel_fmt&2);
+  x0=_region->x>>hdec;
+  x1=(_region->x+_region->width+(1<<hdec)-1)>>hdec;
+  y0=_region->y>>vdec;
+  y1=(_region->y+_region->height+(1<<vdec)-1)>>vdec;
+  *_x0=x0;
+  *_y0=y0;
+  *_w=x1-x0;
+  *_h=y1-y0;
+}
+
+static int oc_dec_region_mul(size_t *_sz,size_t _a,size_t _b){
+  if(_a!=0&&_b>(size_t)-1/_a)return TH_EIMPL;
+  *_sz=_a*_b;
+  return 0;
+}
+
+static int oc_dec_region_layout(const oc_dec_ctx *_dec,
+ const th_region *_region,th_region_layout *_layout){
+  th_region_layout layout;
+  size_t           plane_sz[3];
+  size_t           max_sz;
+  int              frame_width;
+  int              frame_height;
+  int              pli;
+  int              ret;
+  if(_dec==NULL||_region==NULL||_layout==NULL)return TH_EFAULT;
+  frame_width=(int)_dec->state.info.frame_width;
+  frame_height=(int)_dec->state.info.frame_height;
+  if(_region->x<0||_region->y<0||_region->width<=0||
+   _region->height<=0||_region->x>frame_width||
+   _region->y>frame_height||_region->width>frame_width-_region->x||
+   _region->height>frame_height-_region->y){
+    return TH_EINVAL;
+  }
+  memset(&layout,0,sizeof(layout));
+  for(pli=0;pli<3;pli++){
+    int x0;
+    int y0;
+    oc_dec_region_plane_bounds(&_dec->state.info,_region,pli,
+     &x0,&y0,&layout.width[pli],&layout.height[pli]);
+    (void)x0;
+    (void)y0;
+    layout.stride[pli]=layout.width[pli];
+    ret=oc_dec_region_mul(plane_sz+pli,(size_t)layout.width[pli],
+     (size_t)layout.height[pli]);
+    if(ret<0)return ret;
+  }
+  max_sz=(size_t)-1;
+  if(plane_sz[1]>max_sz-plane_sz[0]||
+   plane_sz[2]>max_sz-plane_sz[0]-plane_sz[1]){
+    return TH_EIMPL;
+  }
+  layout.offset[0]=0;
+  layout.offset[1]=plane_sz[0];
+  layout.offset[2]=plane_sz[0]+plane_sz[1];
+  layout.size=plane_sz[0]+plane_sz[1]+plane_sz[2];
+  *_layout=layout;
+  return 0;
+}
+
+static int oc_dec_has_frame(const oc_dec_ctx *_dec){
+  return _dec->state.ref_frame_idx[OC_FRAME_SELF]>=0&&
+   _dec->state.ref_frame_data[OC_FRAME_SELF]!=NULL&&
+   _dec->pp_frame_buf[0].data!=NULL;
+}
+
+int th_decode_ycbcr_region_layout(const th_dec_ctx *_dec,
+ const th_region *_region,th_region_layout *_layout){
+  return oc_dec_region_layout(_dec,_region,_layout);
+}
+
+int th_decode_ycbcr_region(th_dec_ctx *_dec,const th_region *_region,
+ th_region_layout *_layout,unsigned char *_dst,size_t _dst_sz){
+  th_ycbcr_buffer buf;
+  th_region_layout layout;
+  int              ret;
+  int              pli;
+  if(_dec==NULL||_region==NULL||_layout==NULL)return TH_EFAULT;
+  ret=oc_dec_region_layout(_dec,_region,&layout);
+  if(ret<0)return ret;
+  *_layout=layout;
+  if(_dst==NULL)return 0;
+  if(_dst_sz<layout.size||!oc_dec_has_frame(_dec))return TH_EINVAL;
+  oc_ycbcr_buffer_flip(buf,_dec->pp_frame_buf);
+  for(pli=0;pli<3;pli++){
+    const unsigned char *src;
+    unsigned char       *dst;
+    int                  x0;
+    int                  y0;
+    int                  w;
+    int                  h;
+    int                  y;
+    oc_dec_region_plane_bounds(&_dec->state.info,_region,pli,&x0,&y0,&w,&h);
+    src=buf[pli].data+y0*(ptrdiff_t)buf[pli].stride+x0;
+    dst=_dst+layout.offset[pli];
+    for(y=0;y<h;y++){
+      memcpy(dst+y*(ptrdiff_t)layout.stride[pli],
+       src+y*(ptrdiff_t)buf[pli].stride,(size_t)w);
+    }
+  }
+  return 0;
+}
+
+int th_decode_ycbcr_region_rows(th_dec_ctx *_dec,const th_region *_region,
+ th_region_row_func _func,void *_ctx){
+  th_ycbcr_buffer  buf;
+  th_region_layout layout;
+  th_region_row    row;
+  int              hdec;
+  int              vdec;
+  int              ret;
+  int              y;
+  if(_dec==NULL||_region==NULL||_func==NULL)return TH_EFAULT;
+  ret=oc_dec_region_layout(_dec,_region,&layout);
+  if(ret<0)return ret;
+  if(!oc_dec_has_frame(_dec))return TH_EINVAL;
+  oc_ycbcr_buffer_flip(buf,_dec->pp_frame_buf);
+  hdec=!(_dec->state.info.pixel_fmt&1);
+  vdec=!(_dec->state.info.pixel_fmt&2);
+  for(y=0;y<_region->height;y++){
+    int ay;
+    ay=_region->y+y;
+    row.row=y;
+    row.y=buf[0].data+ay*(ptrdiff_t)buf[0].stride+_region->x;
+    row.cb=buf[1].data+(ay>>vdec)*(ptrdiff_t)buf[1].stride+
+     (_region->x>>hdec);
+    row.cr=buf[2].data+(ay>>vdec)*(ptrdiff_t)buf[2].stride+
+     (_region->x>>hdec);
+    ret=(*_func)(_ctx,&row,&layout);
+    if(ret!=0)return ret;
+  }
+  return 0;
+}

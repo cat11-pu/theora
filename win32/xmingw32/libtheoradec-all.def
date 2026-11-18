@@ -56,3 +56,7 @@ EXPORTS
 	th_comment_query @ 40
 	th_comment_query_count @ 41
 	th_comment_clear @ 42
+
+	th_decode_ycbcr_region_layout @ 43
+	th_decode_ycbcr_region @ 44
+	th_decode_ycbcr_region_rows @ 45

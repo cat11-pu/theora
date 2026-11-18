@@ -35,6 +35,9 @@ EXPORTS
 	th_decode_ctl
 	th_decode_packetin
 	th_decode_ycbcr_out
+	th_decode_ycbcr_region_layout
+	th_decode_ycbcr_region
+	th_decode_ycbcr_region_rows
 	th_decode_free
 	th_packet_isheader
 	th_packet_iskeyframe

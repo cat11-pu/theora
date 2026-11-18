@@ -7,6 +7,9 @@ _th_setup_free
 _th_decode_ctl
 _th_decode_packetin
 _th_decode_ycbcr_out
+_th_decode_ycbcr_region_layout
+_th_decode_ycbcr_region
+_th_decode_ycbcr_region_rows
 _th_decode_free
 _th_packet_isheader
 _th_packet_iskeyframe

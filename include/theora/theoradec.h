@@ -150,6 +150,80 @@ typedef struct{
   th_stripe_decoded_func  stripe_decoded;
 }th_stripe_callback;
 
+/**A rectangular region of a decoded frame.
+ * Coordinates and dimensions are in luma samples, measured from the top-left
+ *  corner of the full coded frame (th_info#frame_width by
+ *  th_info#frame_height).
+ * They are not relative to the displayable picture offset
+ *  (th_info#pic_x, th_info#pic_y).
+ * The rectangle must be non-empty and lie entirely inside the coded frame.*/
+typedef struct{
+  /**The left edge of the region.*/
+  int x;
+  /**The top edge of the region.*/
+  int y;
+  /**The width of the region in luma samples.*/
+  int width;
+  /**The height of the region in luma samples.*/
+  int height;
+}th_region;
+
+/**The canonical tightly packed layout of a decoded region.
+ * Planes are stored in Y', Cb, Cr order, and each plane begins at
+ *  <tt>data + offset[pli]</tt>.
+ * Row \a y of plane \a pli begins at
+ *  <tt>data + offset[pli] + y*stride[pli]</tt>, and exactly
+ *  <tt>width[pli]</tt> bytes are valid.
+ * Every stride is equal to the corresponding plane width, so there is no
+ *  padding between rows.
+ * For subsampled chroma, the chroma rectangle contains every chroma sample
+ *  that covers any luma sample in the requested rectangle:
+ *  <tt>x0=x>>hdec</tt>, <tt>x1=(x+width+(1<<hdec)-1)>>hdec</tt>, and
+ *  likewise for the vertical direction.
+ * This is the same cropping rule used by the existing full-frame output
+ *  path.*/
+typedef struct{
+  /**The width of each plane.*/
+  int    width[3];
+  /**The height of each plane.*/
+  int    height[3];
+  /**The number of bytes between successive rows of each plane.*/
+  int    stride[3];
+  /**The offset of each plane from the start of the region buffer.*/
+  size_t offset[3];
+  /**The total number of bytes required to store the region.*/
+  size_t size;
+}th_region_layout;
+
+/**A single row passed to a #th_region_row_func.
+ * All pointers refer to decoder-owned memory and are only valid for the
+ *  duration of the callback.
+ * The Y' row has #th_region_layout#width[0] valid bytes, and each chroma row
+ *  has the corresponding chroma width.
+ * When chroma is vertically subsampled, the same chroma row may be passed for
+ *  more than one luma row.*/
+typedef struct{
+  /**The zero-based row within the requested region.*/
+  int                  row;
+  /**A pointer to the first luma sample in this row.*/
+  const unsigned char *y;
+  /**A pointer to the first Cb sample in this row.*/
+  const unsigned char *cb;
+  /**A pointer to the first Cr sample in this row.*/
+  const unsigned char *cr;
+}th_region_row;
+
+/**A callback function for decoded region rows.
+ * Rows are delivered top to bottom.
+ * \param _ctx   An application-provided context pointer.
+ * \param _row   The decoded row.
+ * \param _layout The canonical layout of the whole region.
+ * \return Zero to continue, or a non-zero value to stop decoding rows.
+ *          The non-zero value is returned from
+ *          th_decode_ycbcr_region_rows().*/
+typedef int (*th_region_row_func)(void *_ctx,const th_region_row *_row,
+ const th_region_layout *_layout);
+
 
 
 /**\name Decoder state
@@ -317,6 +391,56 @@ extern int th_decode_packetin(th_dec_ctx *_dec,const ogg_packet *_op,
  */
 extern int th_decode_ycbcr_out(th_dec_ctx *_dec,
  th_ycbcr_buffer _ycbcr);
+/**Computes the canonical tightly packed layout of a region.
+ * This can be called as soon as the decoder has been allocated, before any
+ *  packet is submitted.
+ * \param _dec    A #th_dec_ctx handle.
+ * \param _region The region to describe.
+ * \param _layout Returns the layout.
+ * \retval 0        Success.
+ * \retval TH_EFAULT \a _dec, \a _region, or \a _layout is <tt>NULL</tt>.
+ * \retval TH_EINVAL The region is empty or extends outside the coded frame.
+ * \retval TH_EIMPL  The required size is not representable on this platform.*/
+extern int th_decode_ycbcr_region_layout(const th_dec_ctx *_dec,
+ const th_region *_region,th_region_layout *_layout);
+/**Copies the current decoded frame's requested region into a compact buffer.
+ * The layout can be queried by calling this function with \a _dst set to
+ *  <tt>NULL</tt>, in which case \a _dst_sz is ignored.
+ * Otherwise, \a _dst must point to at least #th_region_layout#size bytes.
+ * The copied planes have the canonical layout described by
+ *  #th_region_layout: top-down, tightly packed rows with no padding.
+ * This function only copies the requested rectangle; it does not allocate a
+ *  full-frame output buffer.
+ * The decoder's internal reference frames are still required, as Theora
+ *  inter frames may predict from any part of a previous frame.
+ * \param _dec    A #th_dec_ctx handle.
+ * \param _region The region to copy.
+ * \param _layout Returns the layout.
+ * \param _dst    The destination buffer, or <tt>NULL</tt> to query the layout.
+ * \param _dst_sz The number of bytes available in \a _dst.
+ * \retval 0        Success.
+ * \retval TH_EFAULT \a _dec, \a _region, or \a _layout is <tt>NULL</tt>.
+ * \retval TH_EINVAL The region is invalid, no decoded frame is available, or
+ *                    \a _dst_sz is smaller than the required size.
+ * \retval TH_EIMPL  The required size is not representable on this platform.*/
+extern int th_decode_ycbcr_region(th_dec_ctx *_dec,const th_region *_region,
+ th_region_layout *_layout,unsigned char *_dst,size_t _dst_sz);
+/**Delivers the current decoded frame's requested region one row at a time.
+ * This avoids allocating an output buffer. The row pointers reference the
+ *  decoder's decoded frame directly, and are valid only during the callback.
+ * Rows are delivered top to bottom, and each call to this function starts
+ *  again at the first row of the region.
+ * \param _dec    A #th_dec_ctx handle.
+ * \param _region The region to deliver.
+ * \param _func   The row callback.
+ * \param _ctx    An application-provided context pointer passed to \a _func.
+ * \return Zero on success, the first non-zero value returned by \a _func, or
+ *          a negative error code.
+ * \retval TH_EFAULT \a _dec, \a _region, or \a _func is <tt>NULL</tt>.
+ * \retval TH_EINVAL The region is invalid or no decoded frame is available.
+ * \retval TH_EIMPL  The required size is not representable on this platform.*/
+extern int th_decode_ycbcr_region_rows(th_dec_ctx *_dec,
+ const th_region *_region,th_region_row_func _func,void *_ctx);
 /**Frees an allocated decoder instance.
  * \param _dec A #th_dec_ctx handle.*/
 extern void th_decode_free(th_dec_ctx *_dec);
